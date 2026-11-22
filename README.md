@@ -45,22 +45,38 @@ total: 78  (major 1 × 30 + minor 4 × 3 + patch 36 × 1)
 
 | オプション | 説明 |
 | --- | --- |
-| `[PATH]` | `package-lock.json` か、それを含むディレクトリ(既定は `.`) |
+| `[PATH]` | ロックファイルか、それを含むディレクトリ(既定は `.`) |
 | `--weights 30,3,1` | 重み(MAJOR,MINOR,PATCH) |
 | `--prod` | devDependencies を除く |
 | `--json` | JSON で出力する(CI で保存して推移を見る用) |
 | `--all` / `--top N` | 最新の依存も表示する / 表示件数を絞る |
 | `--fail-over N` | 合計スコアが N を超えたら終了コード 2 |
-| `--concurrency 8` | deps.dev への同時リクエスト数 |
+| `--concurrency 8` | レジストリへの同時リクエスト数 |
 | `--cache-ttl 12` | キャッシュの有効期間(時間) |
 | `--offline` / `--no-cache` | キャッシュだけを使う / キャッシュを使わない |
 
 ## 対応状況
 
-- npm の `package-lock.json`(lockfileVersion 2 / 3)の直接依存。ワークスペースやローカルパスの依存は対象外。
-- バージョン情報は [deps.dev API](https://docs.deps.dev/api/v3/) の `GetPackage` から取る。
-  応答は `$XDG_CACHE_HOME/dept/`(未設定なら `~/.cache/dept/`)にキャッシュし、
-  429 / 5xx は指数バックオフで再試行する。
+| ロックファイル | 対象 |
+| --- | --- |
+| `pnpm-lock.yaml`(lockfileVersion 6 / 9) | 各 importer(ワークスペースの各パッケージ)の直接依存 |
+| `package-lock.json`(lockfileVersion 2 / 3) | ルートパッケージの直接依存 |
+
+- ディレクトリを渡すと、上のロックファイルを探す。複数あるときはファイルを指定する。
+- ワークスペース内のパッケージ(`link:`)、`file:`・tarball・git から入れている依存は対象外。
+- エイリアス(`npm:other@^1`)は実際のパッケージ名で調べる。
+- モノレポで同じパッケージの同じバージョンが複数の importer にあれば 1 行にまとめる。
+
+### バージョン情報の取り先
+
+サードパーティの API は使わず、パッケージマネージャーが使うレジストリから直接取る。
+
+- npm / pnpm:npm レジストリ(既定は `https://registry.npmjs.org/`)。
+  `.npmrc` の `registry=` と `@scope:registry=` に従う(優先順は 環境変数 `npm_config_registry` > プロジェクトの `.npmrc` > `~/.npmrc`)。
+  認証が要るレジストリにはまだ対応していない。
+
+取った結果は、必要なフィールドだけを `$XDG_CACHE_HOME/dept/`(未設定なら `~/.cache/dept/`)にキャッシュする。
+429 / 5xx と接続エラーは指数バックオフで再試行する。
 
 ## 開発
 

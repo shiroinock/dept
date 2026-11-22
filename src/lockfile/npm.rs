@@ -1,36 +1,10 @@
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+//! npm の package-lock.json(lockfileVersion 2 / 3)。
+
+use anyhow::{Result, bail};
+use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::path::Path;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DepKind {
-    Prod,
-    Optional,
-    Dev,
-}
-
-impl DepKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Prod => "prod",
-            Self::Optional => "optional",
-            Self::Dev => "dev",
-        }
-    }
-}
-
-/// package.json に直接書かれていて、ロックファイルで解決済みのバージョンが分かる依存。
-#[derive(Debug, Clone)]
-pub struct DirectDep {
-    /// package.json 上の名前(エイリアスならエイリアス名)
-    pub alias: String,
-    /// レジストリ上の実パッケージ名
-    pub name: String,
-    pub version: String,
-    pub kind: DepKind,
-}
+use super::{DepKind, DirectDep};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,13 +30,7 @@ struct Entry {
 }
 
 /// 警告(スキップした依存など)と一緒に直接依存を返す。
-pub fn read_npm(path: &Path) -> Result<(Vec<DirectDep>, Vec<String>)> {
-    let text = std::fs::read_to_string(path)
-        .with_context(|| format!("{} を読めませんでした", path.display()))?;
-    parse_npm(&text).with_context(|| format!("{} を解析できませんでした", path.display()))
-}
-
-pub fn parse_npm(text: &str) -> Result<(Vec<DirectDep>, Vec<String>)> {
+pub fn parse(text: &str) -> Result<(Vec<DirectDep>, Vec<String>)> {
     let lock: Lock = serde_json::from_str(text)?;
     match lock.lockfile_version {
         Some(2 | 3) => {}
@@ -136,7 +104,7 @@ mod tests {
 
     #[test]
     fn reads_direct_deps_only() {
-        let (deps, warnings) = parse_npm(LOCK).unwrap();
+        let (deps, warnings) = parse(LOCK).unwrap();
         let got: Vec<_> = deps
             .iter()
             .map(|d| {
@@ -161,7 +129,7 @@ mod tests {
 
     #[test]
     fn rejects_v1() {
-        let err = parse_npm(r#"{"lockfileVersion": 1, "dependencies": {}}"#).unwrap_err();
+        let err = parse(r#"{"lockfileVersion": 1, "dependencies": {}}"#).unwrap_err();
         assert!(err.to_string().contains("lockfileVersion 1"));
     }
 }

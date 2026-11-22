@@ -1,5 +1,7 @@
-mod depsdev;
+mod fetch;
 mod lockfile;
+mod npm;
+mod registry;
 mod score;
 
 use anyhow::Result;
@@ -12,8 +14,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use depsdev::{Client, Fetched};
+use fetch::Fetcher;
 use lockfile::{DepKind, DirectDep};
+use npm::NpmConfig;
+use registry::Releases;
 use score::{Lag, Weights};
 
 /// 依存ライブラリが最新版からどれだけ遅れているかをスコアにする。
@@ -23,7 +27,7 @@ use score::{Lag, Weights};
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
-    /// package-lock.json か、それを含むディレクトリ
+    /// ロックファイル(pnpm-lock.yaml / package-lock.json)か、それを含むディレクトリ
     #[arg(default_value = ".")]
     path: PathBuf,
 
@@ -51,7 +55,7 @@ struct Cli {
     #[arg(long, value_name = "N")]
     fail_over: Option<u64>,
 
-    /// deps.dev へ同時に送るリクエスト数
+    /// レジストリへ同時に送るリクエスト数
     #[arg(long, default_value_t = 8)]
     concurrency: usize,
 
@@ -85,6 +89,7 @@ struct Row {
 #[derive(Serialize)]
 struct Report {
     lockfile: String,
+    format: &'static str,
     weights: Weights,
     total: u64,
     lag: Lag,
@@ -106,32 +111,34 @@ fn main() -> ExitCode {
 
 fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
-    let lock_path = if cli.path.is_dir() {
-        cli.path.join("package-lock.json")
-    } else {
-        cli.path.clone()
-    };
-
-    let (mut deps, warnings) = lockfile::read_npm(&lock_path)?;
-    for w in &warnings {
+    let mut lock = lockfile::read(&cli.path)?;
+    for w in &lock.warnings {
         eprintln!("warning: {w}");
     }
     if cli.prod {
-        deps.retain(|d| d.kind != DepKind::Dev);
+        lock.deps.retain(|d| d.kind != DepKind::Dev);
     }
 
     let cache_dir = if cli.no_cache {
         None
     } else {
-        depsdev::default_cache_dir()
+        fetch::default_cache_dir()
     };
-    let client = Client::new(
-        cache_dir,
-        Duration::from_secs(cli.cache_ttl * 3600),
-        cli.offline,
-    );
-    let mut rows = evaluate_all(&client, &deps, cli.weights, cli.concurrency.max(1));
-    rows.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+    let sources = Sources {
+        fetcher: Fetcher::new(
+            cache_dir,
+            Duration::from_secs(cli.cache_ttl * 3600),
+            cli.offline,
+        ),
+        npm: NpmConfig::load(lock.project_dir()),
+    };
+    let mut rows = evaluate_all(&sources, &lock.deps, cli.weights, cli.concurrency.max(1));
+    rows.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then_with(|| a.name.cmp(&b.name))
+            .then_with(|| a.current.cmp(&b.current))
+    });
 
     let lag = rows.iter().fold(Lag::default(), |acc, r| Lag {
         major: acc.major + r.lag.major,
@@ -139,7 +146,8 @@ fn run() -> Result<ExitCode> {
         patch: acc.patch + r.lag.patch,
     });
     let report = Report {
-        lockfile: lock_path.display().to_string(),
+        lockfile: lock.path.display().to_string(),
+        format: lock.format.file_name(),
         weights: cli.weights,
         total: rows.iter().map(|r| r.score).sum(),
         lag,
@@ -175,7 +183,19 @@ fn run() -> Result<ExitCode> {
     })
 }
 
-fn evaluate_all(client: &Client, deps: &[DirectDep], w: Weights, workers: usize) -> Vec<Row> {
+/// リリース一覧の取り先。いまは npm レジストリだけ。
+struct Sources {
+    fetcher: Fetcher,
+    npm: NpmConfig,
+}
+
+impl Sources {
+    fn releases(&self, dep: &DirectDep) -> Result<Option<Releases>> {
+        npm::releases(&self.fetcher, &self.npm, &dep.name)
+    }
+}
+
+fn evaluate_all(sources: &Sources, deps: &[DirectDep], w: Weights, workers: usize) -> Vec<Row> {
     let next = AtomicUsize::new(0);
     let rows = Mutex::new(Vec::with_capacity(deps.len()));
     std::thread::scope(|s| {
@@ -184,7 +204,7 @@ fn evaluate_all(client: &Client, deps: &[DirectDep], w: Weights, workers: usize)
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
                     let Some(dep) = deps.get(i) else { break };
-                    let row = evaluate(client, dep, w);
+                    let row = evaluate(sources, dep, w);
                     rows.lock().unwrap().push(row);
                 }
             });
@@ -193,7 +213,7 @@ fn evaluate_all(client: &Client, deps: &[DirectDep], w: Weights, workers: usize)
     rows.into_inner().unwrap()
 }
 
-fn evaluate(client: &Client, dep: &DirectDep, w: Weights) -> Row {
+fn evaluate(sources: &Sources, dep: &DirectDep, w: Weights) -> Row {
     let mut row = Row {
         name: dep.alias.clone(),
         package: dep.name.clone(),
@@ -212,10 +232,10 @@ fn evaluate(client: &Client, dep: &DirectDep, w: Weights) -> Row {
             return row;
         }
     };
-    let pkg = match client.npm_package(&dep.name) {
-        Ok(Fetched::Found(p)) => p,
-        Ok(Fetched::NotFound) => {
-            row.error = Some("deps.dev にパッケージが見つかりません".into());
+    let pkg = match sources.releases(dep) {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            row.error = Some("レジストリにパッケージが見つかりません".into());
             return row;
         }
         Err(e) => {
@@ -224,18 +244,18 @@ fn evaluate(client: &Client, dep: &DirectDep, w: Weights) -> Row {
         }
     };
 
-    let parsed: Vec<(Version, &depsdev::PackageVersion)> = pkg
+    let parsed: Vec<(Version, Option<&str>)> = pkg
         .versions
         .iter()
-        .filter_map(|pv| {
-            Version::parse(&pv.version_key.version)
+        .filter_map(|r| {
+            Version::parse(&r.version)
                 .ok()
-                .map(|v| (v, pv))
+                .map(|v| (v, r.published.as_deref()))
         })
         .collect();
     let releases: Vec<Version> = parsed.iter().map(|(v, _)| v.clone()).collect();
-    let default = parsed.iter().find(|(_, pv)| pv.is_default).map(|(v, _)| v);
-    let Some(target) = score::pick_target(default, &releases) else {
+    let default = pkg.default.as_deref().and_then(|d| Version::parse(d).ok());
+    let Some(target) = score::pick_target(default.as_ref(), &releases) else {
         row.error = Some("安定版のリリースがありません".into());
         return row;
     };
@@ -248,16 +268,12 @@ fn evaluate(client: &Client, dep: &DirectDep, w: Weights) -> Row {
 }
 
 /// 現在のバージョンと最新版の公開日の差(年)。どちらかの公開日が不明なら None。
-fn libyear(
-    parsed: &[(Version, &depsdev::PackageVersion)],
-    current: &Version,
-    target: &Version,
-) -> Option<f64> {
+fn libyear(parsed: &[(Version, Option<&str>)], current: &Version, target: &Version) -> Option<f64> {
     let published = |v: &Version| {
         parsed
             .iter()
             .find(|(pv, _)| pv == v)
-            .and_then(|(_, p)| p.published_at.as_deref())
+            .and_then(|(_, p)| *p)
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
     };
     let days = (published(target)? - published(current)?).num_seconds() as f64 / 86_400.0;
