@@ -109,6 +109,8 @@ struct Report {
     lag: Lag,
     packages: usize,
     outdated: usize,
+    /// レジストリのエラーなどで調べられなかった依存の数。合計スコアには入っていない
+    errors: usize,
     libyear: f64,
     rows: Vec<Row>,
 }
@@ -167,6 +169,7 @@ fn run() -> Result<ExitCode> {
         lag,
         packages: rows.len(),
         outdated: rows.iter().filter(|r| r.score > 0).count(),
+        errors: rows.iter().filter(|r| r.error.is_some()).count(),
         libyear: rows.iter().filter_map(|r| r.libyear).sum(),
         rows,
     };

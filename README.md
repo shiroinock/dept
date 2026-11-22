@@ -87,6 +87,11 @@ on:
 
 permissions: {}
 
+# 近い時刻に 2 つ走っても、古い結果があとから上書きしないようにする
+concurrency:
+  group: dept
+  cancel-in-progress: true
+
 jobs:
   dept:
     runs-on: ubuntu-latest
@@ -100,6 +105,7 @@ jobs:
         # with:
         #   path: .              # ロックファイルか、それを含むディレクトリ
         #   args: --prod         # dept に渡す追加の引数
+        #   allow-errors: false  # 調べられなかった依存があっても置くか
         #   branch: dept-badge   # 置き先。空にすると push しない
 ```
 
@@ -111,6 +117,8 @@ jobs:
   タグを付けたコミット(リリース)に固定して使う。
 - `dept-badge` ブランチに `dept.svg` と `dept.json` を置く。ブランチは毎回 1 コミットに置き換え、中身が変わらなければ push しない。
 - `raw.githubusercontent.com` を使うので、公開リポジトリ向け。
+- 調べられなかった依存(レジストリのエラーなど)があると、スコアが低く出るので、push せずに失敗にする。
+  見つからない非公開パッケージなどがあって構わないなら `allow-errors: true` にする。
 - `args` に `--fail-over N` を渡すと、バッジを置いたあとでジョブを失敗にする。
 - 出力:`score`(合計スコア)、`dir`(`dept.svg` と `dept.json` を置いたディレクトリ)。
 - 対応するランナーは Linux(x64 / ARM64)と macOS(ARM64)。

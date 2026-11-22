@@ -16,6 +16,11 @@ inputs:
   args:
     description: dept に渡す追加の引数(`--prod --badge-colors 50,200` など)
     default: ""
+  allow-errors:
+    description: >
+      調べられなかった依存(レジストリのエラーなど)があってもバッジを置くか。
+      既定では、低すぎるスコアで前のバッジを上書きしないよう、push せずに失敗にする
+    default: "false"
   branch:
     description: バッジと結果を置くブランチ。空にすると push しない
     default: dept-badge
@@ -65,6 +70,7 @@ runs:
         DEPT: ${{ steps.install.outputs.dept }}
         INPUT_PATH: ${{ inputs.path }}
         INPUT_ARGS: ${{ inputs.args }}
+        ALLOW_ERRORS: ${{ inputs.allow-errors }}
       run: |
         set -euo pipefail
         out="$RUNNER_TEMP/dept-out"
@@ -76,6 +82,11 @@ runs:
         # 1 は失敗。2(--fail-over を超えた)ならバッジを置いてから失敗にする
         if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
           exit "$status"
+        fi
+        errors=$(jq -r .errors "$out/dept.json")
+        if [ "$errors" -gt 0 ] && [ "$ALLOW_ERRORS" != "true" ]; then
+          echo "::error::調べられなかった依存が $errors 件あるので、バッジを置きません(allow-errors: true で置けます)"
+          exit 1
         fi
         score=$(jq -r .total "$out/dept.json")
         {
