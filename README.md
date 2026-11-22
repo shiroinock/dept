@@ -34,6 +34,17 @@ score = major × 30 + minor × 3 + patch × 1   # 既定の重み
 nix run github:shiroinock/dept -- path/to/project
 ```
 
+Nix を使わない場合は、[リリース](https://github.com/shiroinock/dept/releases)からバイナリを取れる
+(`aarch64-apple-darwin`、`x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu`)。
+バイナリには GitHub Actions でビルドした来歴(SLSA build provenance)と SBOM(CycloneDX)の
+attestation が付いているので、使う前に確かめられる。
+
+```bash
+gh release download -R shiroinock/dept -p 'dept-aarch64-apple-darwin.tar.gz'
+gh attestation verify dept-aarch64-apple-darwin.tar.gz -R shiroinock/dept
+tar -xzf dept-aarch64-apple-darwin.tar.gz dept
+```
+
 ```
 SCORE  PACKAGE     CURRENT  LATEST  MAJ  MIN  PAT  LIBYEAR  KIND
    68  react       18.3.1   19.3.1    1    3   29      2.5  prod
@@ -84,3 +95,17 @@ total: 78  (major 1 × 30 + minor 4 × 3 + patch 36 × 1)
 nix develop
 cargo test
 ```
+
+### リリース
+
+1. `Cargo.toml` の `version` を上げる PR をマージする。
+2. main の先頭に `v<version>` のタグを付けて push する。
+
+   ```bash
+   git tag v0.2.0 && git push origin v0.2.0
+   ```
+
+3. `release.yml` が、タグと `Cargo.toml` の version が同じかを確かめてから、各ターゲットをビルドする。
+   tar.gz、`SHA256SUMS`、SBOM(`dept.cdx.json`)をリリースに載せ、来歴と SBOM の attestation を付ける。
+
+`v*` タグはルールセットで削除と付け替えを禁じ、リリースは immutable にしている(公開後にアセットを差し替えられない)。
