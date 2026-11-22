@@ -1,5 +1,9 @@
 //! pnpm の pnpm-lock.yaml(lockfileVersion 6 / 9)。
 //!
+//! pnpm 11 以降は、`---` で区切った複数の文書を書くことがある。先頭はパッケージマネージャー自身や
+//! `configDependencies` を書いた環境の文書で、プロジェクトの依存はその後ろの文書にある。すべての文書の
+//! `importers` を読む(環境の文書には依存の節が無いので、何も拾わない)。
+//!
 //! ワークスペースでは `importers` の各パッケージの直接依存を集める。同じパッケージの同じ
 //! バージョンが複数の importer にあれば 1 つにまとめ、種類は prod > optional > dev を優先する。
 
@@ -17,27 +21,29 @@ const SECTIONS: [(&str, DepKind); 3] = [
 
 pub fn parse(text: &str) -> Result<(Vec<DirectDep>, Vec<String>)> {
     let docs = YamlLoader::load_from_str(text)?;
-    let Some(doc) = docs.first() else {
+    if docs.is_empty() {
         bail!("中身が空です");
-    };
-
-    let version = match &doc["lockfileVersion"] {
-        Yaml::String(s) => s.parse::<f64>().ok(),
-        Yaml::Real(s) => s.parse::<f64>().ok(),
-        Yaml::Integer(i) => Some(*i as f64),
-        _ => None,
-    };
-    match version {
-        Some(v) if v >= 6.0 => {}
-        Some(v) => bail!("lockfileVersion {v} には対応していません(6 以上に対応)"),
-        None => bail!("lockfileVersion がありません"),
     }
 
-    // ワークスペースでなければ、v6 は依存をトップレベルに書くことがある
-    let importers: Vec<&Yaml> = match doc["importers"].as_hash() {
-        Some(h) => h.values().collect(),
-        None => vec![doc],
-    };
+    let mut importers: Vec<&Yaml> = Vec::new();
+    for doc in &docs {
+        let version = match &doc["lockfileVersion"] {
+            Yaml::String(s) => s.parse::<f64>().ok(),
+            Yaml::Real(s) => s.parse::<f64>().ok(),
+            Yaml::Integer(i) => Some(*i as f64),
+            _ => None,
+        };
+        match version {
+            Some(v) if v >= 6.0 => {}
+            Some(v) => bail!("lockfileVersion {v} には対応していません(6 以上に対応)"),
+            None => bail!("lockfileVersion がありません"),
+        }
+        // ワークスペースでなければ、v6 は依存をトップレベルに書くことがある
+        match doc["importers"].as_hash() {
+            Some(h) => importers.extend(h.values()),
+            None => importers.push(doc),
+        }
+    }
 
     let mut found: BTreeMap<(String, String, String), DepKind> = BTreeMap::new();
     let mut warnings = Vec::new();
@@ -214,6 +220,19 @@ packages:
         assert_eq!(deps.len(), 2);
         assert_eq!(deps[0].name, "react");
         assert_eq!(deps[1].kind, DepKind::Dev);
+    }
+
+    #[test]
+    fn reads_every_document_of_pnpm_11() {
+        // 先頭は環境の文書(pnpm 自身と configDependencies)、プロジェクトの依存は 2 つ目
+        let text = "---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    configDependencies: {}\n    packageManagerDependencies:\n      pnpm:\n        specifier: 12.21.0\n        version: 12.21.0\n\npackages:\n\n  pnpm@12.21.0:\n    resolution: {integrity: sha512-x}\n\n---\nlockfileVersion: '9.0'\n\nimporters:\n\n  .:\n    dependencies:\n      zenn-cli:\n        specifier: ^0.5.0\n        version: 0.5.15\n";
+        let (deps, warnings) = parse(text).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let got: Vec<_> = deps
+            .iter()
+            .map(|d| (d.name.as_str(), d.version.as_str()))
+            .collect();
+        assert_eq!(got, vec![("zenn-cli", "0.5.15")]);
     }
 
     #[test]
