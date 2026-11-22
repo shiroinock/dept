@@ -62,9 +62,66 @@ total: 78  (major 1 × 30 + minor 4 × 3 + patch 36 × 1)
 | `--json` | JSON で出力する(CI で保存して推移を見る用) |
 | `--all` / `--top N` | 最新の依存も表示する / 表示件数を絞る |
 | `--fail-over N` | 合計スコアが N を超えたら終了コード 2 |
+| `--badge FILE` | README に貼るバッジ(SVG)を書く |
+| `--badge-label dept` | バッジの左側の文字 |
+| `--badge-colors 100,500` | バッジの色の境目(GREEN,YELLOW)。GREEN 以下は緑、YELLOW 以下は黄、それより上は赤 |
 | `--concurrency 8` | レジストリへの同時リクエスト数 |
 | `--cache-ttl 12` | キャッシュの有効期間(時間) |
 | `--offline` / `--no-cache` | キャッシュだけを使う / キャッシュを使わない |
+
+## README のバッジ
+
+GitHub Actions で dept を定期的に走らせ、スコアのバッジを README に出せる。
+バッジの SVG は dept が自分で作り、shields.io などの外部サービスは使わない。
+
+```yaml
+# .github/workflows/dept.yml
+name: dept
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * 1" # 毎週月曜
+  workflow_dispatch:
+
+permissions: {}
+
+# 近い時刻に 2 つ走っても、古い結果があとから上書きしないようにする
+concurrency:
+  group: dept
+  cancel-in-progress: true
+
+jobs:
+  dept:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # バッジのブランチに push する
+    steps:
+      - uses: actions/checkout@<sha> # v7
+        with:
+          persist-credentials: false
+      - uses: shiroinock/dept@<sha> # v0.2.0
+        # with:
+        #   path: .              # ロックファイルか、それを含むディレクトリ
+        #   args: --prod         # dept に渡す追加の引数
+        #   allow-errors: false  # 調べられなかった依存があっても置くか
+        #   branch: dept-badge   # 置き先。空にすると push しない
+```
+
+```markdown
+![dept](https://raw.githubusercontent.com/<owner>/<repo>/dept-badge/dept.svg)
+```
+
+- アクションは、自分と同じバージョンの dept をリリースから取る。来歴の attestation を確かめてから使う。
+  タグを付けたコミット(リリース)に固定して使う。
+- `dept-badge` ブランチに `dept.svg` と `dept.json` を置く。ブランチは毎回 1 コミットに置き換え、中身が変わらなければ push しない。
+- `raw.githubusercontent.com` を使うので、公開リポジトリ向け。
+- 調べられなかった依存(レジストリのエラーなど)があると、スコアが低く出るので、push せずに失敗にする。
+  見つからない非公開パッケージなどがあって構わないなら `allow-errors: true` にする。
+- `args` に `--fail-over N` を渡すと、バッジを置いたあとでジョブを失敗にする。
+- 出力:`score`(合計スコア)、`dir`(`dept.svg` と `dept.json` を置いたディレクトリ)。
+- 対応するランナーは Linux(x64 / ARM64)と macOS(ARM64)。
 
 ## 対応状況
 
