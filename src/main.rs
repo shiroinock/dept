@@ -1,10 +1,11 @@
+mod badge;
 mod fetch;
 mod lockfile;
 mod npm;
 mod registry;
 mod score;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use semver::Version;
 use serde::Serialize;
@@ -14,6 +15,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use badge::Thresholds;
 use fetch::Fetcher;
 use lockfile::{DepKind, DirectDep};
 use npm::NpmConfig;
@@ -54,6 +56,18 @@ struct Cli {
     /// 合計スコアがこの値を超えたら終了コード 2 で終わる
     #[arg(long, value_name = "N")]
     fail_over: Option<u64>,
+
+    /// README に貼るバッジ(SVG)をこのファイルに書く
+    #[arg(long, value_name = "FILE")]
+    badge: Option<PathBuf>,
+
+    /// バッジの左側の文字
+    #[arg(long, default_value = "dept", requires = "badge")]
+    badge_label: String,
+
+    /// バッジの色の境目(GREEN,YELLOW)。GREEN 以下は緑、YELLOW 以下は黄、それより上は赤
+    #[arg(long, default_value = "100,500", requires = "badge")]
+    badge_colors: Thresholds,
 
     /// レジストリへ同時に送るリクエスト数
     #[arg(long, default_value_t = 8)]
@@ -163,6 +177,11 @@ fn run() -> Result<ExitCode> {
             r.name,
             r.error.as_deref().unwrap_or_default()
         );
+    }
+
+    if let Some(path) = &cli.badge {
+        let svg = badge::render(&cli.badge_label, report.total, cli.badge_colors);
+        std::fs::write(path, svg).with_context(|| format!("{} に書けません", path.display()))?;
     }
 
     if cli.json {

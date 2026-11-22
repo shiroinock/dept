@@ -1,0 +1,122 @@
+# dept を走らせ、README に貼るバッジ(dept.svg)と結果(dept.json)をブランチに置く。
+#
+# dept はこのアクションと同じバージョンのリリースから取り、来歴の attestation を確かめてから使う。
+# ブランチへ push するので、呼ぶジョブには `contents: write` が要る。
+name: dept
+description: 依存の遅れをスコアにし、README に貼るバッジを作る
+author: shiroinock
+branding:
+  icon: clock
+  color: orange
+
+inputs:
+  path:
+    description: ロックファイルか、それを含むディレクトリ
+    default: "."
+  args:
+    description: dept に渡す追加の引数(`--prod --badge-colors 50,200` など)
+    default: ""
+  branch:
+    description: バッジと結果を置くブランチ。空にすると push しない
+    default: dept-badge
+  token:
+    description: リリースの取得・attestation の確認・push に使うトークン
+    default: ${{ github.token }}
+
+outputs:
+  score:
+    description: 合計スコア
+    value: ${{ steps.run.outputs.score }}
+  dir:
+    description: dept.svg と dept.json を置いたディレクトリ
+    value: ${{ steps.run.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: dept を入れる
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        case "$RUNNER_OS/$RUNNER_ARCH" in
+          Linux/X64) target=x86_64-unknown-linux-gnu ;;
+          Linux/ARM64) target=aarch64-unknown-linux-gnu ;;
+          macOS/ARM64) target=aarch64-apple-darwin ;;
+          *) echo "::error::$RUNNER_OS/$RUNNER_ARCH 向けのリリースはありません"; exit 1 ;;
+        esac
+        version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ACTION_PATH/Cargo.toml" | head -n1)
+        bin="$RUNNER_TEMP/dept-bin"
+        mkdir -p "$bin"
+        gh release download "v$version" -R shiroinock/dept -p "dept-$target.tar.gz" -D "$bin" --clobber
+        gh attestation verify "$bin/dept-$target.tar.gz" -R shiroinock/dept \
+          --signer-workflow shiroinock/dept/.github/workflows/release.yml
+        tar -xzf "$bin/dept-$target.tar.gz" -C "$bin" dept
+        echo "dept=$bin/dept" >> "$GITHUB_OUTPUT"
+
+    - name: dept を走らせる
+      id: run
+      shell: bash
+      env:
+        DEPT: ${{ steps.install.outputs.dept }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        out="$RUNNER_TEMP/dept-out"
+        mkdir -p "$out"
+        status=0
+        # 追加の引数は空白で分ける
+        # shellcheck disable=SC2086
+        "$DEPT" "$INPUT_PATH" $INPUT_ARGS --json --badge "$out/dept.svg" > "$out/dept.json" || status=$?
+        # 1 は失敗。2(--fail-over を超えた)ならバッジを置いてから失敗にする
+        if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+          exit "$status"
+        fi
+        score=$(jq -r .total "$out/dept.json")
+        {
+          echo "score=$score"
+          echo "dir=$out"
+          echo "status=$status"
+        } >> "$GITHUB_OUTPUT"
+        echo "### dept: $score" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: バッジをブランチに置く
+      if: inputs.branch != ''
+      shell: bash
+      env:
+        TOKEN: ${{ inputs.token }}
+        BRANCH: ${{ inputs.branch }}
+        OUT: ${{ steps.run.outputs.dir }}
+      run: |
+        set -euo pipefail
+        work="$RUNNER_TEMP/dept-branch"
+        rm -rf "$work"
+        git init -q "$work"
+        cd "$work"
+        auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 | tr -d '\n')
+        echo "::add-mask::$auth"
+        git config http.extraheader "AUTHORIZATION: basic $auth"
+        git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+        # 前と同じ中身なら push しない
+        if git fetch -q --depth=1 origin "$BRANCH" 2>/dev/null &&
+          git show FETCH_HEAD:dept.json 2>/dev/null | cmp -s - "$OUT/dept.json"; then
+          echo "バッジは変わっていません"
+          exit 0
+        fi
+        # 履歴は残さず、毎回 1 コミットの orphan ブランチにする
+        git checkout -q --orphan "$BRANCH"
+        cp "$OUT/dept.svg" "$OUT/dept.json" .
+        git add dept.svg dept.json
+        git -c user.name="github-actions[bot]" \
+          -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+          commit -q -m "dept: $(jq -r .total dept.json) ($GITHUB_SHA)"
+        git push -q --force origin "HEAD:refs/heads/$BRANCH"
+
+    - name: --fail-over を超えたら失敗にする
+      if: steps.run.outputs.status == '2'
+      shell: bash
+      run: exit 2
