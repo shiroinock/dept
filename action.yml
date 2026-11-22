@@ -54,7 +54,8 @@ runs:
         gh release download "v$version" -R shiroinock/dept -p "dept-$target.tar.gz" -D "$bin" --clobber
         gh attestation verify "$bin/dept-$target.tar.gz" -R shiroinock/dept \
           --signer-workflow shiroinock/dept/.github/workflows/release.yml
-        tar -xzf "$bin/dept-$target.tar.gz" -C "$bin" dept
+        # 中は ./dept と ./README.md(release.yml が `tar -C staging .` で固める)
+        tar -xzf "$bin/dept-$target.tar.gz" -C "$bin"
         echo "dept=$bin/dept" >> "$GITHUB_OUTPUT"
 
     - name: dept を走らせる
@@ -101,9 +102,10 @@ runs:
         echo "::add-mask::$auth"
         git config http.extraheader "AUTHORIZATION: basic $auth"
         git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
-        # 前と同じ中身なら push しない
+        # 前と同じ中身なら push しない(--badge-colors などで SVG だけ変わることもあるので両方見る)
         if git fetch -q --depth=1 origin "$BRANCH" 2>/dev/null &&
-          git show FETCH_HEAD:dept.json 2>/dev/null | cmp -s - "$OUT/dept.json"; then
+          git show FETCH_HEAD:dept.json 2>/dev/null | cmp -s - "$OUT/dept.json" &&
+          git show FETCH_HEAD:dept.svg 2>/dev/null | cmp -s - "$OUT/dept.svg"; then
           echo "バッジは変わっていません"
           exit 0
         fi
