@@ -63,6 +63,7 @@ total: 78  (major 1 × 30 + minor 4 × 3 + patch 36 × 1)
 | `--all` / `--top N` | 最新の依存も表示する / 表示件数を絞る |
 | `--fail-over N` | 合計スコアが N を超えたら終了コード 2 |
 | `--badge FILE` | README に貼るバッジ(SVG)を書く |
+| `--report FILE` | どの依存がどれだけ遅れているかの Markdown のレポートを書く |
 | `--badge-label dept` | バッジの左側の文字 |
 | `--badge-colors 100,500` | バッジの色の境目(GREEN,YELLOW)。GREEN 以下は緑、YELLOW 以下は黄、それより上は赤 |
 | `--concurrency 8` | レジストリへの同時リクエスト数 |
@@ -109,18 +110,20 @@ jobs:
         #   branch: dept-badge   # 置き先。空にすると push しない
 ```
 
+バッジをクリックすると、どの依存がどれだけ遅れているかのレポート(`dept.md`)が開くようにする。
+
 ```markdown
-![dept](https://raw.githubusercontent.com/<owner>/<repo>/dept-badge/dept.svg)
+[![dept](https://raw.githubusercontent.com/<owner>/<repo>/dept-badge/dept.svg)](https://github.com/<owner>/<repo>/blob/dept-badge/dept.md)
 ```
 
 - アクションは、自分と同じバージョンの dept をリリースから取る。来歴の attestation を確かめてから使う。
   タグを付けたコミット(リリース)に固定して使う。
-- `dept-badge` ブランチに `dept.svg` と `dept.json` を置く。ブランチは毎回 1 コミットに置き換え、中身が変わらなければ push しない。
+- `dept-badge` ブランチに `dept.svg`、`dept.md`、`dept.json` を置く。レポートはジョブのサマリーにも出す。ブランチは毎回 1 コミットに置き換え、中身が変わらなければ push しない。
 - `raw.githubusercontent.com` を使うので、公開リポジトリ向け。
 - 調べられなかった依存(レジストリのエラーなど)があると、スコアが低く出るので、push せずに失敗にする。
   見つからない非公開パッケージなどがあって構わないなら `allow-errors: true` にする。
 - `args` に `--fail-over N` を渡すと、バッジを置いたあとでジョブを失敗にする。
-- 出力:`score`(合計スコア)、`dir`(`dept.svg` と `dept.json` を置いたディレクトリ)。
+- 出力:`score`(合計スコア)、`dir`(`dept.svg`、`dept.md`、`dept.json` を置いたディレクトリ)。
 - 対応するランナーは Linux(x64 / ARM64)と macOS(ARM64)。
 
 ## 対応状況

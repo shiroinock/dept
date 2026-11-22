@@ -3,6 +3,7 @@ mod fetch;
 mod lockfile;
 mod npm;
 mod registry;
+mod report;
 mod score;
 
 use anyhow::{Context, Result};
@@ -60,6 +61,10 @@ struct Cli {
     /// README に貼るバッジ(SVG)をこのファイルに書く
     #[arg(long, value_name = "FILE")]
     badge: Option<PathBuf>,
+
+    /// どの依存がどれだけ遅れているかの Markdown のレポートをこのファイルに書く
+    #[arg(long, value_name = "FILE")]
+    report: Option<PathBuf>,
 
     /// バッジの左側の文字
     #[arg(long, default_value = "dept", requires = "badge")]
@@ -185,6 +190,11 @@ fn run() -> Result<ExitCode> {
     if let Some(path) = &cli.badge {
         let svg = badge::render(&cli.badge_label, report.total, cli.badge_colors);
         std::fs::write(path, svg).with_context(|| format!("{} に書けません", path.display()))?;
+    }
+
+    if let Some(path) = &cli.report {
+        std::fs::write(path, report::markdown(&report))
+            .with_context(|| format!("{} に書けません", path.display()))?;
     }
 
     if cli.json {
