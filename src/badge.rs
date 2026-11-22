@@ -1,6 +1,6 @@
 //! README に貼るバッジ(shields.io の flat と同じ見た目の SVG)を外部サービスなしで作る。
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use std::str::FromStr;
 
 /// 色を変える境目。`green` 以下は緑、`yellow` 以下は黄、それより上は赤。
@@ -18,7 +18,11 @@ impl FromStr for Thresholds {
         let [g, y] = parts.as_slice() else {
             bail!("GREEN,YELLOW の形で指定してください: {s}");
         };
-        let (green, yellow): (u64, u64) = (g.parse()?, y.parse()?);
+        let num = |v: &str| {
+            v.parse::<u64>()
+                .with_context(|| format!("{v} は 0 以上の整数ではありません"))
+        };
+        let (green, yellow) = (num(g)?, num(y)?);
         if green > yellow {
             bail!("GREEN は YELLOW 以下にしてください: {s}");
         }
