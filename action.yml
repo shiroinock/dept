@@ -1,4 +1,4 @@
-# dept を走らせ、README に貼るバッジ(dept.svg)と結果(dept.json)をブランチに置く。
+# dept を走らせ、README に貼るバッジ(dept.svg)、レポート(dept.md)、結果(dept.json)をブランチに置く。
 #
 # dept はこのアクションと同じバージョンのリリースから取り、来歴の attestation を確かめてから使う。
 # ブランチへ push するので、呼ぶジョブには `contents: write` が要る。
@@ -22,7 +22,7 @@ inputs:
       既定では、低すぎるスコアで前のバッジを上書きしないよう、push せずに失敗にする
     default: "false"
   branch:
-    description: バッジと結果を置くブランチ。空にすると push しない
+    description: バッジ・レポート・結果を置くブランチ。空にすると push しない
     default: dept-badge
   token:
     description: リリースの取得・attestation の確認・push に使うトークン
@@ -33,7 +33,7 @@ outputs:
     description: 合計スコア
     value: ${{ steps.run.outputs.score }}
   dir:
-    description: dept.svg と dept.json を置いたディレクトリ
+    description: dept.svg、dept.md、dept.json を置いたディレクトリ
     value: ${{ steps.run.outputs.dir }}
 
 runs:
@@ -79,13 +79,13 @@ runs:
         status=0
         # 追加の引数は空白で分ける
         # shellcheck disable=SC2086
-        "$DEPT" "$INPUT_PATH" $INPUT_ARGS --json --badge "$out/dept.svg" > "$out/dept.json" || status=$?
+        "$DEPT" "$INPUT_PATH" $INPUT_ARGS --json --badge "$out/dept.svg" --report "$out/dept.md" > "$out/dept.json" || status=$?
         # 1 は失敗。2(--fail-over を超えた)ならバッジを置いてから失敗にする
         if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
           exit "$status"
         fi
         # 引数の誤り(clap)も 2 で終わるので、結果が書けているかで見分ける
-        if [ ! -s "$out/dept.json" ] || [ ! -s "$out/dept.svg" ]; then
+        if [ ! -s "$out/dept.json" ] || [ ! -s "$out/dept.svg" ] || [ ! -s "$out/dept.md" ]; then
           echo "::error::dept が結果を書けませんでした(終了コード $status)"
           exit 1
         fi
@@ -100,7 +100,7 @@ runs:
           echo "dir=$out"
           echo "status=$status"
         } >> "$GITHUB_OUTPUT"
-        echo "### dept: $score" >> "$GITHUB_STEP_SUMMARY"
+        cat "$out/dept.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: バッジをブランチに置く
       if: inputs.branch != ''
@@ -119,17 +119,22 @@ runs:
         echo "::add-mask::$auth"
         git config http.extraheader "AUTHORIZATION: basic $auth"
         git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
-        # 前と同じ中身なら push しない(--badge-colors などで SVG だけ変わることもあるので両方見る)
-        if git fetch -q --depth=1 origin "$BRANCH" 2>/dev/null &&
-          git show FETCH_HEAD:dept.json 2>/dev/null | cmp -s - "$OUT/dept.json" &&
-          git show FETCH_HEAD:dept.svg 2>/dev/null | cmp -s - "$OUT/dept.svg"; then
-          echo "バッジは変わっていません"
-          exit 0
+        files=(dept.svg dept.json dept.md)
+        # 前と同じ中身なら push しない(--badge-colors などで SVG だけ変わることもあるので全部見る)
+        if git fetch -q --depth=1 origin "$BRANCH" 2>/dev/null; then
+          same=true
+          for f in "${files[@]}"; do
+            git show "FETCH_HEAD:$f" 2>/dev/null | cmp -s - "$OUT/$f" || same=false
+          done
+          if [ "$same" = true ]; then
+            echo "バッジとレポートは変わっていません"
+            exit 0
+          fi
         fi
         # 履歴は残さず、毎回 1 コミットの orphan ブランチにする
         git checkout -q --orphan "$BRANCH"
-        cp "$OUT/dept.svg" "$OUT/dept.json" .
-        git add dept.svg dept.json
+        for f in "${files[@]}"; do cp "$OUT/$f" .; done
+        git add "${files[@]}"
         git -c user.name="github-actions[bot]" \
           -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
           commit -q -m "dept: $(jq -r .total dept.json) ($GITHUB_SHA)"
