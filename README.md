@@ -130,7 +130,7 @@ jobs:
 
 | ロックファイル | 対象 |
 | --- | --- |
-| `pnpm-lock.yaml`(lockfileVersion 6 / 9) | 各 importer(ワークスペースの各パッケージ)の直接依存 |
+| `pnpm-lock.yaml`(lockfileVersion 6 / 9。pnpm 11 以降の、`---` で区切った複数の文書も読む) | 各 importer(ワークスペースの各パッケージ)の直接依存 |
 | `package-lock.json`(lockfileVersion 2 / 3) | ルートパッケージの直接依存 |
 
 - ディレクトリを渡すと、上のロックファイルを探す。複数あるときはファイルを指定する。
