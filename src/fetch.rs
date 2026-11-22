@@ -37,14 +37,7 @@ impl Fetcher {
         T: Serialize + DeserializeOwned,
         F: FnOnce(&Self) -> Result<Option<T>>,
     {
-        let path = self.cache_dir.as_ref().map(|dir| {
-            let mut p = dir.clone();
-            for part in key {
-                p.push(encode_path_segment(part));
-            }
-            p.set_extension("json");
-            p
-        });
+        let path = self.cache_dir.as_ref().map(|dir| cache_path(dir, key));
 
         let ttl = if self.offline { None } else { Some(self.ttl) };
         if let Some(path) = &path
@@ -120,6 +113,19 @@ pub fn encode_path_segment(s: &str) -> String {
     out
 }
 
+/// キーの各部分を符号化してディレクトリにし、最後の部分に `.json` を足す。
+/// `set_extension` は最後の `.` から後ろを置き換えるので使わない(`lodash.merge` が `lodash.json` になる)。
+fn cache_path(dir: &Path, key: &[&str]) -> PathBuf {
+    let mut p = dir.to_path_buf();
+    if let Some((last, parents)) = key.split_last() {
+        for part in parents {
+            p.push(encode_path_segment(part));
+        }
+        p.push(format!("{}.json", encode_path_segment(last)));
+    }
+    p
+}
+
 fn read_fresh(path: &Path, ttl: Option<Duration>) -> Option<String> {
     let meta = std::fs::metadata(path).ok()?;
     if let Some(ttl) = ttl {
@@ -162,5 +168,22 @@ mod tests {
     fn encodes_scoped_names() {
         assert_eq!(encode_path_segment("@types/node"), "%40types%2Fnode");
         assert_eq!(encode_path_segment("lodash.merge"), "lodash.merge");
+    }
+
+    #[test]
+    fn cache_paths_keep_dotted_names_apart() {
+        let dir = Path::new("/c");
+        let paths: Vec<_> = ["lodash", "lodash.merge", "lodash.get", "chart.js"]
+            .iter()
+            .map(|n| cache_path(dir, &["npm", "registry.npmjs.org", n]))
+            .collect();
+        assert_eq!(
+            paths[1],
+            Path::new("/c/npm/registry.npmjs.org/lodash.merge.json")
+        );
+        let mut unique = paths.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), paths.len(), "{paths:?}");
     }
 }

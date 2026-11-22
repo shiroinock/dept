@@ -98,9 +98,11 @@ enum Resolved {
 }
 
 /// importer の `version:` を読む。ピアの解決結果 `(react@18.3.1)` は外し、
-/// エイリアス(`npm:other@^1`)は `other@1.2.3` の形で書かれるので実名を取り出す。
+/// エイリアス(`npm:other@^1`)は `other@1.2.3`(v6 では依存パスの `/other@1.2.3`)の形で
+/// 書かれるので実名を取り出す。
 fn resolve(alias: &str, raw: &str) -> Resolved {
     let base = raw.split('(').next().unwrap_or(raw);
+    let base = base.strip_prefix('/').unwrap_or(base);
     if base.starts_with("link:") {
         return Resolved::Workspace;
     }
@@ -224,6 +226,21 @@ packages:
     fn resolves_versions() {
         assert_eq!(resolve("x", "link:../x"), Resolved::Workspace);
         assert_eq!(resolve("x", "https://example.com/x.tgz"), Resolved::Other);
+        // v6 のエイリアスは依存パスで書かれ、先頭に `/` が付く
+        assert_eq!(
+            resolve("my-lodash", "/lodash@4.17.21"),
+            Resolved::Registry {
+                name: "lodash".into(),
+                version: "4.17.21".into()
+            }
+        );
+        assert_eq!(
+            resolve("ui", "/@corp/design@2.3.0(react@18.0.0)"),
+            Resolved::Registry {
+                name: "@corp/design".into(),
+                version: "2.3.0".into()
+            }
+        );
         assert_eq!(
             resolve("@a/b", "1.0.0(react@18.0.0)"),
             Resolved::Registry {
