@@ -1,0 +1,28 @@
+# Claude Code reviews every ready PR, and labels it マージ予約 when nothing needs fixing.
+# Make "review / verdict" a required check: it fails while Claude's findings remain.
+# The jobs live in shiroinock/workflows; change them there, not here.
+name: Claude のレビュー
+
+on:
+  # pull_request (not pull_request_target): a fork's PR gets no secrets, and is skipped too.
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  review:
+    uses: shiroinock/workflows/.github/workflows/claude-review.yml@main
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write # the nits job collects minor findings in an issue
+      actions: write
+      id-token: write
+    with:
+      review_focus: |
+        - スコアの定義(リリースの分類、0.x の扱い、prerelease の除外、最新版の選び方)が README と食い違っていないか。変えるときはテストと README も直しているか
+        - deps.dev への問い合わせが増えすぎないか(キャッシュ、同時リクエスト数、429 と 5xx の再試行)
+        - Nix で純粋にビルドできるか(ビルド中にネットワークに出ない、キャッシュは XDG に置く)
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
